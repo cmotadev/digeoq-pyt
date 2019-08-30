@@ -2,7 +2,19 @@
 import arcpy
 import io
 import re
+import win32print as prn
+
 from datetime import datetime
+from os import path
+from tempfile import TemporaryFile
+
+
+def get_zebra_printers():
+    """
+    :return:
+    """
+    return [name for flags, descr, name, cmnts in prn.EnumPrinters(prn.PRINTER_ENUM_LOCAL) if
+            name.find("ZDesigner") >= 0]
 
 
 class Toolbox(object):
@@ -20,31 +32,6 @@ class GeradorEtiqueta(object):
     """
     Ferramenta para gerar etiquetas Zebra
     """
-
-    __TEMPLATE__ = u"""^XA
-
-^FX Borda da etiqueta (para referência)
-^FO1,1^GB597,235,1^FS
-
-^FX Texto em UTF-8
-^CI28
-
-^FX CPRM Logo
-^FO60,40^GFA,1190,1190,14,,N038M07,N07EL01F8,M01FFL03FE,M07FFCK0IF8,M0IFEJ01IFC,L03JF8I07JF,L0KFE001KFC,K01LF803LF,K07LFC0MF8,J01NF3MFE,J03NF3NF8,J0NFC0NFE,I03NF003NF8,I07MFE001NFC,001NF8I07NF,007MFEJ01NF8,01NFCK0NFE,03NFL03NF,0NFCM0NFC,3NF8M07NF,7NFN03NF8,::::::::::::::::::::::::::::::::::::::::::3NFN03NF,0NFCM0NFE,07NFL03NF,01NFCK0NFE,007MFEJ01NF8,003NF8I07NF,I0NFE001NFC,I03NF003NF8,J0NFC0NFC,J03NF1NF,J01NF3MFE,K07LFE1MF8,K01LF803LF,L0LF001KFC,L07JFCI0KF8,M0IFEJ01IFE,M07FFCK0IF8,M01FFL03FE,N07EM0F8,N038M07,,^FS
-
-^FX Logo Caption
-^CF0,20,15
-^FO15,140^FB205,2,5,C,0^FDSERVIÇO GEOLÓGICO DO BRASIL CPRM^FS
-
-^FX Data da Coleta
-^CF0,20,20
-^FO15,200^FB205,1,5,C,0^FD%(analysis_date)s^FS
-
-^FX Third section with barcode.
-^BY2,2,150
-^FO240,40^B3^FD%(num_lab)s+%(weight)s^FS
-
-^XZ"""
 
     def __init__(self):
         """Define the tool (tool name is the name of the class)."""
@@ -94,19 +81,27 @@ class GeradorEtiqueta(object):
 
         param3.value = datetime.now().strftime("%x %X")
 
-        # Fifith parameter (Output)
         param4 = arcpy.Parameter(
-            displayName="Output ZPL File",
-            name="out_file",
-            datatype="DEFile",
+            displayName="Selecionar Padrão de Etiqueta",
+            name="in_template",
+            datatype="string",
             parameterType="Required",
-            direction="Output")
+            direction="Input")
 
-        # To define a file filter that includes .csv and .txt extensions,
-        #  set the filter list to a list of file extension names
-        param4.filter.list = ['zpl']
+        param4.filter.type = "ValueList"
+        param4.filter.list = ["digeoq.zpl"]
 
-        return [param0, param1, param2, param3, param4]
+        param5 = arcpy.Parameter(
+            displayName="Selecionar Impressora",
+            name="in_printer",
+            datatype="string",
+            parameterType="Required",
+            direction="Input")
+
+        param5.filter.type = "ValueList"
+        param5.filter.list = get_zebra_printers()
+
+        return [param0, param1, param2, param3, param4, param5]
 
     def isLicensed(self):
         """Set whether tool is licensed to execute."""
@@ -127,7 +122,11 @@ class GeradorEtiqueta(object):
             datetime.strptime(parameters[3].valueAsText.strip(), "%x")
 
         except ValueError:
-            parameters[3].setErrorMessage("Não é permitido inserir apenas hora. Selecione Data, apenas")
+            try:
+                datetime.strptime(parameters[3].valueAsText.strip(), "%x %X")
+
+            except ValueError:
+                parameters[3].setErrorMessage("Não é permitido inserir apenas hora. Selecione Data ou Data e Hora")
 
         return
 
@@ -136,13 +135,16 @@ class GeradorEtiqueta(object):
         in_table = parameters[0].valueAsText
         in_numlab_field = parameters[1].valueAsText
         in_wght_field = parameters[2].valueAsText
-        in_analysis_date = parameters[3].valueAsText
-        out_file = parameters[4].valueAsText
+        in_analysis_date = datetime.strftime(parameters[3].value, "%d/%m/%Y")
+        in_template = path.join(path.dirname(path.realpath(__file__)), parameters[4].valueAsText)
+        in_printer = parameters[5].valueAsText
 
         # Let´s do the magic
-        cnt = arcpy.GetCount_management(in_table)
+        if not path.exists(in_template):
+            messages.setErrorMessage("Arquivo de template [%s] ZPL inexistente. Entrar em contato com a DIGEOP")
+            return
 
-        messages.addMessage(in_overwrite)
+        cnt = arcpy.GetCount_management(in_table)
 
         if cnt == 0:
             messages.addMessage("Não há registros selecionados")
@@ -150,20 +152,46 @@ class GeradorEtiqueta(object):
 
         messages.addMessage("%s amostras selecionadas" % cnt)
 
-        # Iteration
-        with io.open(out_file, "w", encoding="utf-8") as output:
-            with arcpy.da.SearchCursor(in_table,[in_numlab_field, in_wght_field]) as rows:
+        # Lê o template
+        with io.open(in_template, "r", encoding="utf-8") as template:
+            _template = "".join(template.readlines())
+            raw_data = []
+
+            # Adiciona os atributos e grava no tempfile
+            with arcpy.da.SearchCursor(in_table, [in_numlab_field, in_wght_field]) as rows:
                 for row in rows:
+                    # Data da análise
                     _date = in_analysis_date
-                    _num_lab = re.sub('[\s\-\_]+', '', row[0])
-                    _weight =  unicode(row[1]).zfill(4)
 
-                    output.write(self.__TEMPLATE__ % ({
-                        "analysis_date": _date,
-                        "num_lab": _num_lab,
-                        "weight": _weight
-                    }))
+                    # Tratar número de laboratório
+                    _num_lab = re.sub('[\s\-\_]+', '', row[0]).upper()
 
-                    output.write(u"\r\n")
+                    if not re.search("^[A-Z]{3}[0-9]{3}$", _num_lab):
+                        messages.addWarningMessage(u"A alíquota %s está como nome fora de padrão. O padrão aceito é AAA111. A etiqueta não será produzida" % _num_lab)
+                        continue
+
+                    # Tratar peso da amostra
+                    if int(row[1]) >= 10000:
+                        messages.addWarningMessage(u"A alíquota %s possui peso maior que 9999 gramas. A etiqueta não será produzida" % _num_lab)
+                        continue
+
+                    _weight = unicode(row[1]).zfill(4)
+
+                    # Imprimir etiqueta
+                    raw_data.append(_template % ({"analysis_date": _date, "num_lab": _num_lab, "weight": _weight}))
+
+            # Print this
+            try:
+                _printer = prn.OpenPrinter(in_printer)
+                job = prn.StartDocPrinter(_printer, 1, ("ZPLII data from ArcMap", None, "RAW"))
+
+                try:
+                    prn.StartPagePrinter(_printer)
+                    prn.WritePrinter(_printer, u"\r\n".join(raw_data))
+                    prn.EndPagePrinter(_printer)
+                finally:
+                    prn.EndDocPrinter(_printer)
+            finally:
+                prn.ClosePrinter(_printer)
 
         return
