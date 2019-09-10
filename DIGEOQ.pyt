@@ -4,9 +4,9 @@ import io
 import re
 import win32print as prn
 
+from abc import ABCMeta, abstractmethod
 from datetime import datetime
 from os import path
-from tempfile import TemporaryFile
 
 
 def get_zebra_printers():
@@ -25,20 +25,17 @@ class Toolbox(object):
         self.alias = ""
 
         # List of tool classes associated with this toolbox
-        self.tools = [GeradorEtiqueta]
+        self.tools = [ImpimirEtiqueta, CirarArquivoZPL]
 
 
-class GeradorEtiqueta(object):
+class AbstractEtiqueta:
     """
-    Ferramenta para gerar etiquetas Zebra
     """
+    __metaclass__ = ABCMeta
 
-    def __init__(self):
-        """Define the tool (tool name is the name of the class)."""
-        self.label = "Gerador de Etiquetas"
-        self.description = "Ferramenta para, a partir dos dados das alíquotas, gerar arquivos ZPL para impressão em equipamentos Zebra"
-        self.canRunInBackground = True
+    etiquetas = []
 
+    @abstractmethod
     def getParameterInfo(self):
         """Define parameter definitions"""
         # First parameter
@@ -91,28 +88,21 @@ class GeradorEtiqueta(object):
         param4.filter.type = "ValueList"
         param4.filter.list = ["digeoq.zpl"]
 
-        param5 = arcpy.Parameter(
-            displayName="Selecionar Impressora",
-            name="in_printer",
-            datatype="string",
-            parameterType="Required",
-            direction="Input")
+        return [param0, param1, param2, param3, param4]
 
-        param5.filter.type = "ValueList"
-        param5.filter.list = get_zebra_printers()
-
-        return [param0, param1, param2, param3, param4, param5]
-
+    @abstractmethod
     def isLicensed(self):
         """Set whether tool is licensed to execute."""
         return True
 
+    @abstractmethod
     def updateParameters(self, parameters):
         """Modify the values and properties of parameters before internal
         validation is performed.  This method is called whenever a parameter
         has been changed."""
         return
 
+    @abstractmethod
     def updateMessages(self, parameters):
         """Modify the messages created by internal validation for each tool
         parameter.  This method is called after internal validation."""
@@ -130,14 +120,18 @@ class GeradorEtiqueta(object):
 
         return
 
+    @abstractmethod
     def execute(self, parameters, messages):
-        """The source code of the tool."""
+        """
+        :param parameters:
+        :param messages:
+        :return:
+        """
         in_table = parameters[0].valueAsText
         in_numlab_field = parameters[1].valueAsText
         in_wght_field = parameters[2].valueAsText
         in_analysis_date = datetime.strftime(parameters[3].value, "%d/%m/%Y")
         in_template = path.join(path.dirname(path.realpath(__file__)), parameters[4].valueAsText)
-        in_printer = parameters[5].valueAsText
 
         # Let´s do the magic
         if not path.exists(in_template):
@@ -152,10 +146,9 @@ class GeradorEtiqueta(object):
 
         messages.addMessage("%s amostras selecionadas" % cnt)
 
-        # Lê o template
+        # Lê o template e salva em um arquivo temporário
         with io.open(in_template, "r", encoding="utf-8") as template:
             _template = "".join(template.readlines())
-            raw_data = []
 
             # Adiciona os atributos e grava no tempfile
             with arcpy.da.SearchCursor(in_table, [in_numlab_field, in_wght_field]) as rows:
@@ -167,31 +160,175 @@ class GeradorEtiqueta(object):
                     _num_lab = re.sub('[\s\-\_]+', '', row[0]).upper()
 
                     if not re.search("^[A-Z]{3}[0-9]{3}$", _num_lab):
-                        messages.addWarningMessage(u"A alíquota %s está como nome fora de padrão. O padrão aceito é AAA111. A etiqueta não será produzida" % _num_lab)
+                        messages.addWarningMessage(
+                            u"A alíquota %s está como nome fora de padrão. O padrão aceito é AAA111. A etiqueta não será produzida" % _num_lab)
                         continue
 
                     # Tratar peso da amostra
                     if int(row[1]) >= 10000:
-                        messages.addWarningMessage(u"A alíquota %s possui peso maior que 9999 gramas. A etiqueta não será produzida" % _num_lab)
+                        messages.addWarningMessage(
+                            u"A alíquota %s possui peso maior que 9999 gramas. A etiqueta não será produzida" % _num_lab)
                         continue
 
                     _weight = unicode(row[1]).zfill(4)
 
                     # Imprimir etiqueta
-                    raw_data.append(_template % ({"analysis_date": _date, "num_lab": _num_lab, "weight": _weight}))
+                    self.etiquetas.append(_template % ({"analysis_date": _date, "num_lab": _num_lab, "weight": _weight}))
+        return
 
-            # Print this
+
+class ImpimirEtiqueta(AbstractEtiqueta):
+    """
+    """
+    def __init__(self):
+        """
+        Define the tool (tool name is the name of the class).
+        """
+        self.label = "Impressão de Etiquetas"
+        self.description = "Ferramenta para, a partir dos dados das alíquotas, imprimir em equipamentos Zebra"
+        self.canRunInBackground = True
+
+    def getParameterInfo(self):
+        """
+        :return:
+        """
+        param5 = arcpy.Parameter(
+            displayName="Selecionar Impressora",
+            name="in_printer",
+            datatype="string",
+            parameterType="Required",
+            direction="Input")
+
+        param5.filter.type = "ValueList"
+        param5.filter.list = get_zebra_printers()
+
+        params = super(ImpimirEtiqueta, self).getParameterInfo()
+        params.append(param5)
+
+        return params
+
+    def isLicensed(self):
+        """
+        :return:
+        """
+        return super(ImpimirEtiqueta, self).isLicensed()
+
+    def updateParameters(self, parameters):
+        """
+        :param parameters:
+        :return:
+        """
+        return super(ImpimirEtiqueta, self).updateParameters(parameters)
+
+    def updateMessages(self, parameters):
+        """
+        :param parameters:
+        :return:
+        """
+        return super(ImpimirEtiqueta, self).updateMessages(parameters)
+
+    def execute(self, parameters, messages):
+        """
+        :param parameters:
+        :param messages:
+        :return:
+        """
+        super(ImpimirEtiqueta, self).execute(parameters, messages)
+
+        # in_table = parameters[0].valueAsText
+        # in_numlab_field = parameters[1].valueAsText
+        # in_wght_field = parameters[2].valueAsText
+        # in_analysis_date = datetime.strftime(parameters[3].value, "%d/%m/%Y")
+        # in_template = path.join(path.dirname(path.realpath(__file__)), parameters[4].valueAsText)
+        in_printer = parameters[5].valueAsText
+
+        # Print this
+        try:
+            _printer = prn.OpenPrinter(in_printer)
+            job = prn.StartDocPrinter(_printer, 1, ("ZPLII data from ArcMap", None, "RAW"))
+
             try:
-                _printer = prn.OpenPrinter(in_printer)
-                job = prn.StartDocPrinter(_printer, 1, ("ZPLII data from ArcMap", None, "RAW"))
-
-                try:
-                    prn.StartPagePrinter(_printer)
-                    prn.WritePrinter(_printer, u"\r\n".join(raw_data))
-                    prn.EndPagePrinter(_printer)
-                finally:
-                    prn.EndDocPrinter(_printer)
+                prn.StartPagePrinter(_printer)
+                prn.WritePrinter(_printer, u"\r\n".join(self.etiquetas))
+                prn.EndPagePrinter(_printer)
             finally:
-                prn.ClosePrinter(_printer)
+                prn.EndDocPrinter(_printer)
+        finally:
+            prn.ClosePrinter(_printer)
+
+        return
+
+
+class CirarArquivoZPL(AbstractEtiqueta):
+    """
+    """
+    def __init__(self):
+        """
+        Define the tool (tool name is the name of the class).
+        """
+        self.label = "Criar Arquivo ZPL"
+        self.description = "Ferramenta para, a partir dos dados das alíquotas, criar arquivos no formato ZPLII para impressão em equipamentos Zebra"
+        self.canRunInBackground = True
+
+    def getParameterInfo(self):
+        """
+        :return:
+        """
+        param5 = arcpy.Parameter(
+            displayName="Local para salvar o arquivo ZPL",
+            name="out_file",
+            datatype="DEFile",
+            parameterType="Required",
+            direction="output")
+
+        param5.filter.list = ["zpl"]
+
+        params = super(CirarArquivoZPL, self).getParameterInfo()
+        params.append(param5)
+
+        return params
+
+    def isLicensed(self):
+        """
+        :return:
+        """
+        return super(CirarArquivoZPL, self).isLicensed()
+
+    def updateParameters(self, parameters):
+        """
+        :param parameters:
+        :return:
+        """
+        return super(CirarArquivoZPL, self).updateParameters(parameters)
+
+    def updateMessages(self, parameters):
+        """
+        :param parameters:
+        :return:
+        """
+        return super(CirarArquivoZPL, self).updateMessages(parameters)
+
+    def execute(self, parameters, messages):
+        """
+        :param parameters:
+        :param messages:
+        :return:
+        """
+        super(CirarArquivoZPL, self).execute(parameters, messages)
+
+        # in_table = parameters[0].valueAsText
+        # in_numlab_field = parameters[1].valueAsText
+        # in_wght_field = parameters[2].valueAsText
+        # in_analysis_date = datetime.strftime(parameters[3].value, "%d/%m/%Y")
+        # in_template = path.join(path.dirname(path.realpath(__file__)), parameters[4].valueAsText)
+        out_file = parameters[5].valueAsText
+
+        # Write File
+        try:
+            with io.open(out_file, "w", encoding="utf-8") as f:
+                f.writelines(self.etiquetas)
+
+        except Exception as e:
+            messages.addErrorMessage( u"Erro ao gerar o arquivo: %s" % str(e))
 
         return
