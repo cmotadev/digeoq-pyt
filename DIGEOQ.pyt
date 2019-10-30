@@ -33,8 +33,6 @@ class AbstractEtiqueta:
     """
     __metaclass__ = ABCMeta
 
-    etiquetas = []
-
     @abstractmethod
     def getParameterInfo(self):
         """Define parameter definitions"""
@@ -132,6 +130,8 @@ class AbstractEtiqueta:
         in_wght_field = parameters[2].valueAsText
         in_analysis_date = datetime.strftime(parameters[3].value, "%d/%m/%Y")
         in_template = path.join(path.dirname(path.realpath(__file__)), parameters[4].valueAsText)
+
+        self.etiquetas = []
 
         # Let´s do the magic
         if not path.exists(in_template):
