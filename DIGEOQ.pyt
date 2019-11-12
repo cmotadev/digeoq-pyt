@@ -79,7 +79,7 @@ class AbstractEtiqueta:
         param4 = arcpy.Parameter(
             displayName="Selecionar Padrão de Etiqueta",
             name="in_template",
-            datatype="string",
+            datatype="GPString",
             parameterType="Required",
             direction="Input")
 
@@ -195,7 +195,7 @@ class ImpimirEtiqueta(AbstractEtiqueta):
         param5 = arcpy.Parameter(
             displayName="Selecionar Impressora",
             name="in_printer",
-            datatype="string",
+            datatype="GPString",
             parameterType="Required",
             direction="Input")
 
